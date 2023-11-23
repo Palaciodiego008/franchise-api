@@ -16,10 +16,21 @@ import (
 
 type Franchise struct {
 	gorm.Model
-	Name      string   `json:"name"`
-	URL       string   `json:"url"`
-	Location  Location `json:"location"`
-	CompanyID uint
+	Name       string   `json:"name"`
+	URL        string   `json:"url"`
+	Location   Location `json:"location" gorm:"foreignKey:LocationID"`
+	LocationID uint
+	Info       Info `json:"info" gorm:"foreignKey:InfoID"`
+	InfoID     uint
+	CompanyID  uint
+}
+
+type Company struct {
+	gorm.Model
+	OwnerID    uint `json:"owner_id"`
+	Franchises []Franchise
+	ImageURL   string
+	DomainInfo DomainInfo `gorm:"foreignKey:CompanyID"`
 }
 
 type Location struct {
@@ -30,31 +41,22 @@ type Location struct {
 	ZipCode string `json:"zip_code"`
 }
 
-type Company struct {
-	gorm.Model
-	OwnerID    uint
-	Info       Info `json:"information"`
-	Franchises []Franchise
-	ImageURL   string
-	DomainInfo DomainInfo
-}
-
 type Owner struct {
 	gorm.Model
-	Email    string   `json:"email"`
-	Phone    string   `json:"phone"`
-	Location Location `json:"location"`
+	Email      string `json:"email"`
+	Phone      string `json:"phone"`
+	LocationID uint   `json:"location_id"`
 }
-
 type Info struct {
 	gorm.Model
-	Name      string   `json:"name"`
-	TaxNumber string   `json:"tax_number"`
-	Location  Location `json:"location"`
+	Name       string `json:"name"`
+	TaxNumber  string `json:"tax_number"`
+	LocationID uint   `json:"location_id"`
 }
 
 type DomainInfo struct {
 	gorm.Model
+	CompanyID  uint      `json:"company_id" gorm:"index"`
 	Created    time.Time `json:"created"`
 	Expires    time.Time `json:"expires"`
 	OwnerName  string    `json:"owner_name"`
@@ -77,8 +79,9 @@ type SSLLabsResponse struct {
 var db *gorm.DB
 
 func main() {
+	var err error
 	port := ":3000"
-	db, err := config.ConnectDB()
+	db, err = config.ConnectDB()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -274,7 +277,7 @@ func parseWhoisResponse(response string) (DomainInfo, error) {
 }
 
 func getDomainInfo(c *gin.Context) {
-	domain := c.Query("domain")
+	domain := c.Query("host")
 	if domain == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Domain parameter is required"})
 		return
