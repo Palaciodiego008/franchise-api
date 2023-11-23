@@ -1,21 +1,29 @@
 package main
 
 import (
+	"clubhub/config"
 	"clubhub/internal"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
-	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/likexian/whois"
+	"gorm.io/gorm"
 )
 
 type Franchise struct {
-	Name     string   `json:"name"`
-	URL      string   `json:"url"`
-	Location Location `json:"location"`
+	gorm.Model
+	Name      string   `json:"name"`
+	URL       string   `json:"url"`
+	Location  Location `json:"location"`
+	CompanyID uint
 }
 
 type Location struct {
+	ID      uint   `gorm:"primaryKey"`
 	City    string `json:"city"`
 	Country string `json:"country"`
 	Address string `json:"address"`
@@ -23,42 +31,84 @@ type Location struct {
 }
 
 type Company struct {
-	Owner      Owner       `json:"owner"`
-	Info       Info        `json:"information"`
-	Franchises []Franchise `json:"franchises"`
+	gorm.Model
+	OwnerID    uint
+	Info       Info `json:"information"`
+	Franchises []Franchise
+	ImageURL   string
+	DomainInfo DomainInfo
 }
 
 type Owner struct {
+	gorm.Model
 	Email    string   `json:"email"`
 	Phone    string   `json:"phone"`
 	Location Location `json:"location"`
 }
 
 type Info struct {
+	gorm.Model
 	Name      string   `json:"name"`
 	TaxNumber string   `json:"tax_number"`
 	Location  Location `json:"location"`
 }
 
-var franchises map[string]Company
+type DomainInfo struct {
+	gorm.Model
+	Created    time.Time `json:"created"`
+	Expires    time.Time `json:"expires"`
+	OwnerName  string    `json:"owner_name"`
+	OwnerEmail string    `json:"owner_email"`
+}
+
+type SSLLabsResponse struct {
+	Host      string `json:"host"`
+	Port      int    `json:"port"`
+	Protocol  string `json:"protocol"`
+	Endpoints []struct {
+		IPAddress  string `json:"ipAddress"`
+		ServerName string `json:"serverName"`
+		Status     string `json:"status"`
+		Grade      string `json:"grade"`
+		Delegation int    `json:"delegation"`
+	} `json:"endpoints"`
+}
+
+var db *gorm.DB
 
 func main() {
-	franchises = make(map[string]Company)
+	port := ":3000"
+	db, err := config.ConnectDB()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Migrar modelos a la base de datos
+	db.AutoMigrate(&Franchise{}, &Location{}, &Company{}, &Owner{}, &Info{}, &DomainInfo{})
+
+	// Iniciar el router
 	router := gin.Default()
 
+	// Configurar rutas
 	router.POST("/franchise", createFranchise)
-	router.PUT("/franchise/:name", updateFranchise)
-	router.GET("/franchise/:name", getFranchiseByName)
+	router.PUT("/franchise/:id", updateFranchise)
+	router.GET("/franchise/:id", getFranchiseByID)
 	router.GET("/franchises", getAllFranchises)
-	router.GET("/companies/:companyName", getFranchisesByCompany)
+	router.GET("/companies/:id", getFranchisesByCompany)
 	router.GET("/location/:country", getFranchisesByLocation)
+	router.GET("/ssl-info", getSSLInfo)
+	router.GET("/domain-info", getDomainInfo)
 
-	err := router.Run(":3000")
+	fmt.Println("Server running on port " + port)
+
+	// Iniciar el servidor
+	err = router.Run(port)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
+// Función para crear una nueva franquicia
 func createFranchise(c *gin.Context) {
 	var newFranchise Franchise
 	if err := c.BindJSON(&newFranchise); err != nil {
@@ -69,21 +119,24 @@ func createFranchise(c *gin.Context) {
 	// Normaliza la sección de ubicación
 	newFranchise.Location.Country = internal.ToTitleCase(newFranchise.Location.Country)
 
-	// Agrega la nueva franquicia al mapa
-	franchises[newFranchise.Name] = Company{Franchises: []Franchise{newFranchise}}
+	// Crear nueva franquicia en la base de datos
+	db.Create(&newFranchise)
 
 	c.JSON(http.StatusCreated, gin.H{"message": "Franchise created successfully"})
 }
 
+// Función para actualizar una franquicia existente
 func updateFranchise(c *gin.Context) {
-	name := c.Param("name")
-	company, exists := franchises[name]
-	if !exists {
+	id := c.Param("id")
+	var updatedFranchise Franchise
+
+	// Buscar la franquicia en la base de datos
+	if err := db.First(&updatedFranchise, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Franchise not found"})
 		return
 	}
 
-	var updatedFranchise Franchise
+	// Bind JSON a la franquicia existente
 	if err := c.BindJSON(&updatedFranchise); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -92,47 +145,48 @@ func updateFranchise(c *gin.Context) {
 	// Normaliza la sección de ubicación
 	updatedFranchise.Location.Country = internal.ToTitleCase(updatedFranchise.Location.Country)
 
-	// Actualiza la información de la franquicia
-	company.Franchises = append(company.Franchises, updatedFranchise)
-	franchises[name] = company
+	// Actualizar la franquicia en la base de datos
+	db.Save(&updatedFranchise)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Franchise updated successfully"})
 }
 
-// Función para obtener una franquicia por nombre
-func getFranchiseByName(c *gin.Context) {
-	name := c.Param("name")
-	company, exists := franchises[name]
-	if !exists {
+// Función para obtener una franquicia por ID
+func getFranchiseByID(c *gin.Context) {
+	id := c.Param("id")
+	var franchise Franchise
+
+	// Buscar la franquicia en la base de datos
+	if err := db.Preload("Location").First(&franchise, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Franchise not found"})
 		return
 	}
 
-	c.JSON(http.StatusOK, company)
+	c.JSON(http.StatusOK, franchise)
 }
 
 // Función para obtener todas las franquicias
 func getAllFranchises(c *gin.Context) {
+	var franchises []Franchise
+
+	// Obtener todas las franquicias de la base de datos
+	db.Find(&franchises)
+
 	c.JSON(http.StatusOK, franchises)
 }
 
 // Función para obtener todas las franquicias de una compañía
 func getFranchisesByCompany(c *gin.Context) {
-	companyName := c.Param("companyName")
-	var matchingFranchises []Franchise
+	id := c.Param("id")
+	var company Company
 
-	for _, company := range franchises {
-		if strings.Contains(strings.ToLower(company.Info.Name), strings.ToLower(companyName)) {
-			matchingFranchises = append(matchingFranchises, company.Franchises...)
-		}
-	}
-
-	if len(matchingFranchises) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "No matching franchises found"})
+	// Buscar la compañía en la base de datos
+	if err := db.Preload("Franchises.Location").First(&company, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Company not found"})
 		return
 	}
 
-	c.JSON(http.StatusOK, matchingFranchises)
+	c.JSON(http.StatusOK, company.Franchises)
 }
 
 // Función para obtener todas las franquicias en un país
@@ -140,13 +194,10 @@ func getFranchisesByLocation(c *gin.Context) {
 	country := c.Param("country")
 	var matchingFranchises []Franchise
 
-	for _, company := range franchises {
-		for _, franchise := range company.Franchises {
-			if strings.EqualFold(franchise.Location.Country, country) {
-				matchingFranchises = append(matchingFranchises, franchise)
-			}
-		}
-	}
+	// Obtener todas las franquicias de la base de datos que coinciden con el país
+	db.Joins("JOIN locations ON franchises.location_id = locations.id").
+		Where("country = ?", country).
+		Find(&matchingFranchises)
 
 	if len(matchingFranchises) == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "No matching franchises found"})
@@ -154,4 +205,94 @@ func getFranchisesByLocation(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, matchingFranchises)
+}
+
+func getSSLInfo(c *gin.Context) {
+	host := c.Query("host")
+	if host == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Host parameter is required"})
+		return
+	}
+
+	// Construye la URL para el servicio de SSL Labs
+	url := "https://api.ssllabs.com/api/v3/analyze?host=" + host
+
+	// Realiza la solicitud HTTP al servicio de SSL Labs
+	resp, err := http.Get(url)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get SSL info"})
+		return
+	}
+	defer resp.Body.Close()
+
+	// Decodifica la respuesta JSON
+	var sslInfo SSLLabsResponse
+	err = json.NewDecoder(resp.Body).Decode(&sslInfo)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse SSL info"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"sslInfo": sslInfo})
+}
+
+func parseWhoisResponse(response string) (DomainInfo, error) {
+	var domainInfo DomainInfo
+
+	createdDate, err := internal.ExtractValue(response, "Creation Date:")
+	if err != nil {
+		return domainInfo, err
+	}
+	domainInfo.Created, err = time.Parse("2006-01-02", createdDate)
+	if err != nil {
+		return domainInfo, err
+	}
+
+	// Busca la cadena "Registry Expiry Date:" y extrae la fecha de expiración
+	expiryDate, err := internal.ExtractValue(response, "Registry Expiry Date:")
+	if err != nil {
+		return domainInfo, err
+	}
+	domainInfo.Expires, err = time.Parse("2006-01-02", expiryDate)
+	if err != nil {
+		return domainInfo, err
+	}
+
+	// Busca la cadena "Registrant Name:" y extrae el nombre del registrado
+	domainInfo.OwnerName, err = internal.ExtractValue(response, "Registrant Name:")
+	if err != nil {
+		return domainInfo, err
+	}
+
+	// Busca la cadena "Registrant Email:" y extrae el email del registrado
+	domainInfo.OwnerEmail, err = internal.ExtractValue(response, "Registrant Email:")
+	if err != nil {
+		return domainInfo, err
+	}
+
+	return domainInfo, nil
+}
+
+func getDomainInfo(c *gin.Context) {
+	domain := c.Query("domain")
+	if domain == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Domain parameter is required"})
+		return
+	}
+
+	// Realiza la consulta de whois para obtener la información del dominio
+	result, err := whois.Whois(domain)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get domain info"})
+		return
+	}
+
+	// Parsea la respuesta del whois para obtener la información deseada
+	domainInfo, err := parseWhoisResponse(result)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse whois response"})
+		return
+	}
+
+	c.JSON(http.StatusOK, domainInfo)
 }
