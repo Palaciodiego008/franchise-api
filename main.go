@@ -22,6 +22,7 @@ type Franchise struct {
 	LocationID uint
 	Info       Info `json:"info" gorm:"foreignKey:InfoID"`
 	InfoID     uint
+	Company    Company `json:"company" gorm:"foreignKey:CompanyID"`
 	CompanyID  uint
 }
 
@@ -30,7 +31,16 @@ type Company struct {
 	OwnerID    uint `json:"owner_id"`
 	Franchises []Franchise
 	ImageURL   string
-	DomainInfo DomainInfo `gorm:"foreignKey:CompanyID"`
+	DomainInfo DomainInfo `gorm:"foreignKey:CompanyID;references:ID"`
+}
+
+type DomainInfo struct {
+	gorm.Model
+	CompanyID  uint      `json:"company_id"`
+	Created    time.Time `json:"created"`
+	Expires    time.Time `json:"expires"`
+	OwnerName  string    `json:"owner_name"`
+	OwnerEmail string    `json:"owner_email"`
 }
 
 type Location struct {
@@ -52,15 +62,6 @@ type Info struct {
 	Name       string `json:"name"`
 	TaxNumber  string `json:"tax_number"`
 	LocationID uint   `json:"location_id"`
-}
-
-type DomainInfo struct {
-	gorm.Model
-	CompanyID  uint      `json:"company_id" gorm:"index"`
-	Created    time.Time `json:"created"`
-	Expires    time.Time `json:"expires"`
-	OwnerName  string    `json:"owner_name"`
-	OwnerEmail string    `json:"owner_email"`
 }
 
 type SSLLabsResponse struct {
