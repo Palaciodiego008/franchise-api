@@ -1,6 +1,6 @@
-# ClubHub API
+# FranchiseAPI
 
-ClubHub API es una aplicación de servidor que proporciona endpoints para gestionar información sobre franquicias, compañías y detalles de dominio. La API utiliza el framework [Gin](https://gin-gonic.com/) para las rutas y [GORM](https://gorm.io/) como ORM para interactuar con la base de datos.
+Es una aplicación de servidor que proporciona endpoints para gestionar información sobre franquicias, compañías y detalles de dominio. La API utiliza el framework [Gin](https://gin-gonic.com/) para las rutas y [GORM](https://gorm.io/) como ORM para interactuar con la base de datos.
 
 ## Configuración del Proyecto
 
